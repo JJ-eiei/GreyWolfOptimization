@@ -417,38 +417,24 @@ def gwo(
         # Calculate parameter a
         # ====================================================
         #
-        # Standard linear decreasing equation:
+        # Linear decrease from 2 towards 0:
         #
-        #     a = 2 - 2*t/(T-1)
+        #     a = 2 - 2*t/T
         #
         # where:
         #
-        #     t = current iteration
+        #     t = current iteration (0, 1, ..., T-1)
         #     T = total iterations
         #
-        # At first iteration:
+        # First iteration  (t = 0)   : a = 2
+        # Last iteration   (t = T-1) : a = 2/T  (> 0)
         #
-        #     a = 2
-        #
-        # At final iteration:
-        #
-        #     a = 0
+        # a never reaches exactly 0 inside the loop, so the
+        # wolves keep some randomness until the very end.
         #
         # ====================================================
 
-        if max_iterations > 1:
-
-            a = (
-                2
-                - (
-                    2 * iteration
-                    / (max_iterations - 1)
-                )
-            )
-
-        else:
-
-            a = 0
+        a = 2 - 2 * iteration / max_iterations
 
 
         # ====================================================
@@ -673,6 +659,62 @@ def gwo(
 
 
     # ========================================================
+    # EVALUATE FINAL POPULATION
+    # ========================================================
+    #
+    # The loop above evaluates fitness at the START of each
+    # iteration, so the population produced by the last update
+    # has not been evaluated yet.  Evaluate it here so the final
+    # answer and all histories have T + 1 entries (index k
+    # corresponds to positions_history[k]).
+    # ========================================================
+
+    final_fitness = np.array([
+        objective_function(wolf)
+        for wolf in positions
+    ])
+
+    final_order = np.argsort(final_fitness)
+
+    alpha_pos = positions[final_order[0]].copy()
+    beta_pos = positions[final_order[1]].copy()
+    delta_pos = positions[final_order[2]].copy()
+
+    alpha_score = float(final_fitness[final_order[0]])
+
+    if alpha_score < global_best_score:
+
+        global_best_score = alpha_score
+
+        global_best_position = alpha_pos.copy()
+
+    alpha_history.append(alpha_pos.copy())
+    beta_history.append(beta_pos.copy())
+    delta_history.append(delta_pos.copy())
+
+    alpha_fitness_history.append(alpha_score)
+
+    global_best_history.append(
+        float(global_best_score)
+    )
+
+    if known_optimum is not None:
+
+        final_distances = np.linalg.norm(
+            positions - known_optimum,
+            axis=1
+        )
+
+        average_distance_history.append(
+            float(np.mean(final_distances))
+        )
+
+        closest_distance_history.append(
+            float(np.min(final_distances))
+        )
+
+
+    # ========================================================
     # END TIMER
     # ========================================================
 
@@ -761,27 +803,12 @@ def create_function_grid(
     )
 
 
-    Z = np.zeros_like(
-        X
+    # Both objective functions unpack "x, y = position" and use
+    # numpy operations, so the whole grid can be evaluated at once.
+
+    Z = objective_function(
+        np.array([X, Y])
     )
-
-
-    for i in range(
-        resolution
-    ):
-
-        for j in range(
-            resolution
-        ):
-
-            Z[i, j] = (
-                objective_function(
-                    [
-                        X[i, j],
-                        Y[i, j]
-                    ]
-                )
-            )
 
 
     return X, Y, Z
@@ -978,10 +1005,8 @@ def plot_every_iteration(
         # optimization iteration.
         # ====================================================
 
-        leader_index = min(
-            frame,
-            len(alpha_history) - 1
-        )
+        # history lists now have one entry per frame (0..T)
+        leader_index = frame
 
 
         alpha = (
@@ -1089,33 +1114,10 @@ def plot_every_iteration(
 
 
         # ====================================================
-        # Current best fitness
+        # Best fitness found so far (global best up to this frame)
         # ====================================================
 
-        current_fitness = np.array([
-            objective_function(wolf)
-            for wolf in current_positions
-        ])
-
-
-        current_best = np.min(
-            current_fitness
-        )
-
-
-        if frame == 0:
-
-            best_fitness = (
-                current_best
-            )
-
-        else:
-
-            best_fitness = (
-                global_best_history[
-                    frame - 1
-                ]
-            )
+        best_fitness = global_best_history[frame]
 
 
         # ====================================================
@@ -1382,9 +1384,6 @@ def plot_convergence(
     )
 
 
-    plt.show()
-
-
     plt.close()
 
 
@@ -1502,9 +1501,6 @@ def plot_distance_progress(
         output_file,
         dpi=150
     )
-
-
-    plt.show()
 
 
     plt.close()
@@ -1686,26 +1682,27 @@ def print_metrics(
 def generate_manual_calculation(
     objective_function,
     function_name,
-    output_file
+    output_file,
+    total_iterations=50,
+    manual_iterations=2,
+    lower_bound=-5.0,
+    upper_bound=5.0,
+    seed=42
 ):
 
     """
-    Generate a Markdown file demonstrating
-    2 iterations of GWO.
+    Generate a Markdown file demonstrating the first
+    `manual_iterations` iterations of GWO.
 
-    Initial positions are fixed so the values can
-    be reproduced.
+    IMPORTANT
+    ---------
+    T in the equation a = 2 - 2*t/T is the TOTAL number of
+    iterations of the real run (50), NOT the number of
+    iterations shown by hand (2).
+
+    The random numbers r1, r2 are rounded to 2 decimals so the
+    whole calculation can be repeated with a calculator.
     """
-
-    # ========================================================
-    # Initial positions
-    # ========================================================
-    #
-    # Five wolves are used so the calculation is still
-    # readable in a presentation.
-    #
-    # They are intentionally spread around the search space.
-    # ========================================================
 
     positions = np.array([
 
@@ -1721,11 +1718,12 @@ def generate_manual_calculation(
 
     ])
 
+    rng = np.random.default_rng(seed)
 
-    rng = np.random.default_rng(
-        42
-    )
-
+    def fmt(values, digits=4):
+        return "[" + ", ".join(
+            f"{v:.{digits}f}" for v in values
+        ) + "]"
 
     with open(
         output_file,
@@ -1733,438 +1731,152 @@ def generate_manual_calculation(
         encoding="utf-8"
     ) as file:
 
-        file.write(
-            "# GWO Manual Calculation\n\n"
-        )
+        write = file.write
 
+        write("# GWO Manual Calculation\n\n")
+        write(f"## Function: {function_name}\n\n")
 
-        file.write(
-            f"## Function: "
-            f"{function_name}\n\n"
-        )
+        write("## Equations\n\n")
+        write("- `a = 2 - 2*t/T`  "
+              f"(t = 0, 1, ...; T = {total_iterations})\n")
+        write("- `A = 2*a*r1 - a`\n")
+        write("- `C = 2*r2`\n")
+        write("- `D_leader = abs(C*X_leader - X)`\n")
+        write("- `X_k = X_leader - A*D_leader`  "
+              "(k = 1, 2, 3 for Alpha, Beta, Delta)\n")
+        write("- `X(t+1) = (X1 + X2 + X3) / 3`\n\n")
+        write("r1, r2 are random numbers in [0, 1] "
+              "(rounded to 2 decimals here); every wolf, "
+              "every leader and every dimension gets its "
+              "own r1 and r2.\n\n")
 
+        write("## Initial Positions\n\n")
 
-        file.write(
-            "## Initial Positions\n\n"
-        )
+        for i, position in enumerate(positions, start=1):
+            write(f"- Wolf {i}: {fmt(position)}\n")
 
+        write("\n---\n\n")
 
-        for i, position in enumerate(
-            positions,
-            start=1
-        ):
+        for t in range(manual_iterations):
 
-            file.write(
-                f"- Wolf {i}: "
-                f"[{position[0]:.4f}, "
-                f"{position[1]:.4f}]\n"
-            )
-
-
-        file.write(
-            "\n---\n\n"
-        )
-
-
-        # ====================================================
-        # 2 manual iterations
-        # ====================================================
-
-        T = 2
-
-
-        for t in range(
-            T
-        ):
-
-            file.write(
-                f"# Iteration {t + 1}\n\n"
-            )
-
-
-            # =================================================
-            # FITNESS
-            # =================================================
+            write(f"# Iteration {t + 1}\n\n")
 
             fitness = np.array([
-
-                objective_function(
-                    wolf
-                )
-
+                objective_function(wolf)
                 for wolf in positions
-
             ])
 
+            order = np.argsort(fitness)
 
-            order = np.argsort(
-                fitness
+            leaders = [
+                positions[order[0]].copy(),
+                positions[order[1]].copy(),
+                positions[order[2]].copy()
+            ]
+
+            names = ["Alpha", "Beta", "Delta"]
+
+            write("## 1. Fitness\n\n")
+
+            write("| Wolf | Position | Fitness |\n")
+            write("|---|---|---|\n")
+
+            for i in range(len(positions)):
+                write(
+                    f"| {i + 1} | {fmt(positions[i])} "
+                    f"| {fitness[i]:.4f} |\n"
+                )
+
+            write("\n## 2. Leaders\n\n")
+
+            for k in range(3):
+                write(
+                    f"- {names[k]} = Wolf {order[k] + 1} "
+                    f"= {fmt(leaders[k])}, "
+                    f"fitness = {fitness[order[k]]:.4f}\n"
+                )
+
+            a = 2 - 2 * t / total_iterations
+
+            write("\n## 3. Parameter a\n\n")
+            write(
+                f"`a = 2 - 2*{t}/{total_iterations} "
+                f"= {a:.4f}`\n\n"
             )
 
+            write("## 4. Position Update\n\n")
 
-            alpha = positions[
-                order[0]
-            ].copy()
+            new_positions = np.zeros_like(positions)
 
+            for i in range(len(positions)):
 
-            beta = positions[
-                order[1]
-            ].copy()
+                write(f"### Wolf {i + 1}  "
+                      f"X = {fmt(positions[i])}\n\n")
 
+                write("| Leader | r1 | r2 | A | C | D "
+                      "| X_k = X_leader - A*D |\n")
+                write("|---|---|---|---|---|---|---|\n")
 
-            delta = positions[
-                order[2]
-            ].copy()
+                candidates = []
 
+                for k in range(3):
 
-            file.write(
-                "## 1. Fitness\n\n"
-            )
+                    r1 = np.round(rng.random(2), 2)
+                    r2 = np.round(rng.random(2), 2)
 
+                    A = 2 * a * r1 - a
+                    C = 2 * r2
 
-            for i in range(
-                len(positions)
-            ):
+                    D = np.abs(C * leaders[k] - positions[i])
 
-                file.write(
-                    f"- Wolf {i + 1}: "
-                    f"Position = "
-                    f"[{positions[i,0]:.4f}, "
-                    f"{positions[i,1]:.4f}] "
-                    f"-> Fitness = "
-                    f"{fitness[i]:.8f}\n"
-                )
+                    X_k = leaders[k] - A * D
 
+                    candidates.append(X_k)
 
-            file.write(
-                "\n## Leaders\n\n"
-            )
-
-
-            file.write(
-                f"- Alpha = "
-                f"[{alpha[0]:.4f}, "
-                f"{alpha[1]:.4f}]\n"
-            )
-
-
-            file.write(
-                f"- Beta = "
-                f"[{beta[0]:.4f}, "
-                f"{beta[1]:.4f}]\n"
-            )
-
-
-            file.write(
-                f"- Delta = "
-                f"[{delta[0]:.4f}, "
-                f"{delta[1]:.4f}]\n\n"
-            )
-
-
-            # =================================================
-            # a
-            # =================================================
-            #
-            # Equation:
-            #
-            #     a = 2 - 2*t/(T-1)
-            #
-            # =================================================
-
-            a = (
-                2
-                - (
-                    2 * t
-                    / (T - 1)
-                )
-            )
-
-
-            file.write(
-                "## 2. Parameter a\n\n"
-            )
-
-
-            file.write(
-                "`a = 2 - 2*t/(T-1)`\n\n"
-            )
-
-
-            file.write(
-                f"`a = {a:.4f}`\n\n"
-            )
-
-
-            # =================================================
-            # UPDATE POSITIONS
-            # =================================================
-
-            new_positions = np.zeros_like(
-                positions
-            )
-
-
-            file.write(
-                "## 3. Position Update\n\n"
-            )
-
-
-            for i in range(
-                len(positions)
-            ):
-
-                # =================================================
-                # ALPHA
-                # =================================================
-
-                r1 = rng.random(2)
-
-                r2 = rng.random(2)
-
-
-                # Equation:
-                #
-                # A = 2*a*r1 - a
-
-                A1 = (
-                    2 * a * r1
-                    - a
-                )
-
-
-                # Equation:
-                #
-                # C = 2*r2
-
-                C1 = (
-                    2 * r2
-                )
-
-
-                # Equation:
-                #
-                # D_alpha
-                # = |C*X_alpha - X|
-
-                D_alpha = np.abs(
-                    C1 * alpha
-                    - positions[i]
-                )
-
-
-                # Equation:
-                #
-                # X1
-                # = X_alpha - A*D_alpha
-
-                X1 = (
-                    alpha
-                    - A1 * D_alpha
-                )
-
-
-                # =================================================
-                # BETA
-                # =================================================
-
-                r1 = rng.random(2)
-
-                r2 = rng.random(2)
-
-
-                A2 = (
-                    2 * a * r1
-                    - a
-                )
-
-
-                C2 = (
-                    2 * r2
-                )
-
-
-                D_beta = np.abs(
-                    C2 * beta
-                    - positions[i]
-                )
-
-
-                X2 = (
-                    beta
-                    - A2 * D_beta
-                )
-
-
-                # =================================================
-                # DELTA
-                # =================================================
-
-                r1 = rng.random(2)
-
-                r2 = rng.random(2)
-
-
-                A3 = (
-                    2 * a * r1
-                    - a
-                )
-
-
-                C3 = (
-                    2 * r2
-                )
-
-
-                D_delta = np.abs(
-                    C3 * delta
-                    - positions[i]
-                )
-
-
-                X3 = (
-                    delta
-                    - A3 * D_delta
-                )
-
-
-                # =================================================
-                # FINAL POSITION
-                # =================================================
-                #
-                # X(t+1)
-                # = (X1 + X2 + X3) / 3
-                #
+                    write(
+                        f"| {names[k]} | {fmt(r1, 2)} "
+                        f"| {fmt(r2, 2)} | {fmt(A)} "
+                        f"| {fmt(C)} | {fmt(D)} "
+                        f"| {fmt(X_k)} |\n"
+                    )
 
                 new_position = (
-                    X1
-                    + X2
-                    + X3
+                    candidates[0]
+                    + candidates[1]
+                    + candidates[2]
                 ) / 3
 
+                new_positions[i] = new_position
 
-                new_positions[i] = (
-                    new_position
+                write(
+                    "\n`X(t+1) = (X1 + X2 + X3) / 3` "
+                    f"= **{fmt(new_position)}**\n\n"
                 )
-
-
-                # =================================================
-                # Write calculation
-                # =================================================
-
-                file.write(
-                    f"### Wolf {i + 1}\n\n"
-                )
-
-
-                file.write(
-                    f"- Alpha:\n"
-                )
-
-                file.write(
-                    f"  - A1 = "
-                    f"{A1}\n"
-                )
-
-                file.write(
-                    f"  - C1 = "
-                    f"{C1}\n"
-                )
-
-                file.write(
-                    f"  - D_alpha = "
-                    f"{D_alpha}\n"
-                )
-
-                file.write(
-                    f"  - X1 = "
-                    f"{X1}\n\n"
-                )
-
-
-                file.write(
-                    f"- Beta:\n"
-                )
-
-                file.write(
-                    f"  - A2 = "
-                    f"{A2}\n"
-                )
-
-                file.write(
-                    f"  - C2 = "
-                    f"{C2}\n"
-                )
-
-                file.write(
-                    f"  - D_beta = "
-                    f"{D_beta}\n"
-                )
-
-                file.write(
-                    f"  - X2 = "
-                    f"{X2}\n\n"
-                )
-
-
-                file.write(
-                    f"- Delta:\n"
-                )
-
-                file.write(
-                    f"  - A3 = "
-                    f"{A3}\n"
-                )
-
-                file.write(
-                    f"  - C3 = "
-                    f"{C3}\n"
-                )
-
-                file.write(
-                    f"  - D_delta = "
-                    f"{D_delta}\n"
-                )
-
-                file.write(
-                    f"  - X3 = "
-                    f"{X3}\n\n"
-                )
-
-
-                file.write(
-                    "**Final equation:**\n\n"
-                )
-
-
-                file.write(
-                    "`X_new = "
-                    "(X1 + X2 + X3) / 3`\n\n"
-                )
-
-
-                file.write(
-                    f"**New Position = "
-                    f"[{new_position[0]:.6f}, "
-                    f"{new_position[1]:.6f}]**\n\n"
-                )
-
-
-            # =================================================
-            # Boundary handling
-            # =================================================
 
             positions = np.clip(
                 new_positions,
-                -5,
-                5
+                lower_bound,
+                upper_bound
             )
 
+            new_fitness = np.array([
+                objective_function(wolf)
+                for wolf in positions
+            ])
 
-            file.write(
-                "---\n\n"
-            )
+            write(f"## 5. Population after iteration {t + 1}"
+                  " (clipped to the search space)\n\n")
 
+            write("| Wolf | Position | Fitness |\n")
+            write("|---|---|---|\n")
+
+            for i in range(len(positions)):
+                write(
+                    f"| {i + 1} | {fmt(positions[i])} "
+                    f"| {new_fitness[i]:.4f} |\n"
+                )
+
+            write("\n---\n\n")
 
     print(
         f"[OK] Manual calculation saved: "
@@ -2277,7 +1989,7 @@ if __name__ == "__main__":
 
 
     OUTPUT_DIR = (
-        "GWO_results"
+        "GWO_results2"
     )
 
 
